@@ -143,7 +143,6 @@ export class StefanDO extends DurableObject {
     } 
     
     else if (data.type === "admin_init" && attachment.role === "admin") {
-      // Send both active user presence grid and historical metrics table
       this.sendInitialAdminPayload(ws);
     } 
     
@@ -156,7 +155,6 @@ export class StefanDO extends DurableObject {
     }
 
     else if (data.type === "track_data") {
-      // Ingest 5-minute local aggregation tracking metrics from Bob's tab
       const trackingPayload = data.data || {};
       const dateStr = new Date().toISOString().split('T')[0];
       const storageKey = `user:${attachment.username}:date:${dateStr}`;
@@ -170,7 +168,6 @@ export class StefanDO extends DurableObject {
 
       await this.state.storage.put(storageKey, currentMetrics);
 
-      // Instantly update active administrator charts/tables
       this.notifyAdminsOfHistoricalUpdate();
     }
 
@@ -203,6 +200,24 @@ export class StefanDO extends DurableObject {
 
     else if (data.type === "force_reload_user" && attachment.role === "admin") {
       this.sendToClient(data.targetSessionId, { type: "force_reload" });
+    }
+
+    // New audio playback command router
+    else if (data.type === "play_audio" && attachment.role === "admin") {
+      this.broadcastToClients({
+        type: "play_audio",
+        url: data.url
+      });
+    }
+
+    // New image overlay display router
+    else if (data.type === "show_image" && attachment.role === "admin") {
+      this.broadcastToClients({
+        type: "show_image",
+        url: data.url,
+        sizing: data.sizing,
+        duration: data.duration
+      });
     }
   }
 
@@ -398,6 +413,9 @@ function getLoginHTML(hasError = false) {
 // ----------------------------------------------------
 // 3. Admin Panel HTML Template
 // ----------------------------------------------------
+// ----------------------------------------------------
+// 3. Admin Panel HTML Template
+// ----------------------------------------------------
 function getAdminHTML(host) {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -471,7 +489,7 @@ function getAdminHTML(host) {
     input[type="text"]:focus {
       border-color: var(--accent);
     }
-    input[type="date"], select {
+    input[type="date"], select, input[type="number"] {
       background-color: #0f172a;
       border: 1px solid var(--border-color);
       color: var(--text-color);
@@ -482,7 +500,7 @@ function getAdminHTML(host) {
       transition: border-color 0.15s ease;
       box-sizing: border-box;
     }
-    input[type="date"]:focus, select:focus {
+    input[type="date"]:focus, select:focus, input[type="number"]:focus {
       border-color: var(--accent);
     }
 
@@ -490,6 +508,12 @@ function getAdminHTML(host) {
     button:hover { background-color: var(--accent-hover); }
     button.danger-btn { background-color: var(--danger); }
     button.danger-btn:hover { background-color: var(--danger-hover); }
+
+    /* Collapsible styles */
+    details { border: 1px solid var(--border-color); border-radius: 8px; background: #131d31; margin-top: 10px; overflow: hidden; }
+    summary { padding: 14px 20px; font-weight: 600; cursor: pointer; background: var(--card-bg); user-select: none; font-size: 0.95rem; outline: none; }
+    summary:hover { background: #243553; }
+    .details-content { padding: 20px; display: flex; flex-direction: column; gap: 18px; border-top: 1px solid var(--border-color); }
     
     /* Historical table styles */
     table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.9rem; text-align: left; }
@@ -524,33 +548,57 @@ function getAdminHTML(host) {
       <ul id="user-list" class="user-list"></ul>
     </div>
     <div class="content">
-      <!-- 1. Broadcast Card -->
-      <div class="section-card">
-        <div class="form-group">
-          <label for="broadcast-input">Stefan says... (Broadcast to Everyone)</label>
-          <div class="input-row">
-            <input type="text" id="broadcast-input" placeholder="Type a message to send to everyone...">
-            <button id="broadcast-btn">Say</button>
+      <!-- Collapsible Fun Tools Menu -->
+      <details>
+        <summary>👻 Fun Tools</summary>
+        <div class="details-content">
+          <!-- 1. Broadcast -->
+          <div class="form-group">
+            <label for="broadcast-input">Stefan says... (Broadcast to Everyone)</label>
+            <div class="input-row">
+              <input type="text" id="broadcast-input" placeholder="Type a message to send to everyone...">
+              <button id="broadcast-btn">Say</button>
+            </div>
+          </div>
+
+          <!-- 2. Direct Messaging (Whispering) -->
+          <div class="form-group" id="whisper-card" style="opacity: 0.5;">
+            <label id="whisper-label">Stefan whispers... (Select a user from the sidebar list first)</label>
+            <div class="input-row">
+              <input type="text" id="whisper-input" placeholder="Select a user to enable direct messaging..." disabled>
+              <button id="whisper-btn" disabled>Whisper</button>
+            </div>
+          </div>
+
+          <!-- 3. Background Audio Link Playback -->
+          <div class="form-group">
+            <label for="audio-input">Ambient Host Playback (Audio URL Link)</label>
+            <div class="input-row">
+              <input type="text" id="audio-input" placeholder="Enter .mp3, .wav, or direct stream link...">
+              <button id="audio-btn">Play Background Audio</button>
+            </div>
+          </div>
+
+          <!-- 4. Fullscreen Display Overlay Image -->
+          <div class="form-group">
+            <label>Workspace Visual Interference (Overlay Image)</label>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+              <input type="text" id="image-url-input" placeholder="Enter image URL link..." style="flex: 1; min-width: 200px;">
+              <select id="image-sizing-select" style="min-width: 140px;">
+                <option value="fit">Aspect Fit (Contain)</option>
+                <option value="fill">Stretch to Fill (Cover)</option>
+              </select>
+              <input type="number" id="image-duration-input" value="5" min="1" style="width: 80px;" placeholder="Secs">
+              <button id="image-btn">Display Image</button>
+            </div>
           </div>
         </div>
-      </div>
+      </details>
 
-      <!-- 2. Direct Messaging Card (No Reply Required) -->
-      <div class="section-card" id="whisper-card" style="opacity: 0.5;">
-        <div class="form-group">
-          <label id="whisper-label">Stefan whispers... (Select a user from the sidebar list first)</label>
-          <div class="input-row">
-            <input type="text" id="whisper-input" placeholder="Select a user to enable direct messaging..." disabled>
-            <button id="whisper-btn" disabled>Whisper</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 3. Historical Analytics Ledger -->
+      <!-- Historical Analytics Ledger -->
       <div class="section-card">
         <h3>Productivity Ledger (Daily Metrics)</h3>
         
-        <!-- Interactive Date Range & User Filter Panel -->
         <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 20px;">
           <div class="form-group" style="flex: 1; min-width: 140px;">
             <label for="start-date" style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Start Date</label>
@@ -572,7 +620,6 @@ function getAdminHTML(host) {
           </div>
         </div>
 
-        <!-- Compiled Report Summary Card -->
         <div id="compiled-summary-card" style="display: none; background: rgba(59, 130, 246, 0.05); border: 1px dashed var(--accent); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
           <h4 style="margin-top: 0; margin-bottom: 10px; color: var(--accent); font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em;">Compiled Report Summary</h4>
           <div id="compiled-summary-text" style="font-size: 0.9rem; line-height: 1.6; color: var(--text-color);"></div>
@@ -598,7 +645,7 @@ function getAdminHTML(host) {
         </table>
       </div>
 
-      <!-- 4. Activity Feed -->
+      <!-- Activity Feed -->
       <div class="stream-section">
         <h2>Live Activity Feed & Replies</h2>
         <div id="activity-stream" class="stream"></div>
@@ -616,6 +663,14 @@ function getAdminHTML(host) {
     const whisperInput = document.getElementById('whisper-input');
     const whisperBtn = document.getElementById('whisper-btn');
     const refreshAllBtn = document.getElementById('refresh-all-btn');
+    
+    // Fun Tools Inputs
+    const audioInput = document.getElementById('audio-input');
+    const audioBtn = document.getElementById('audio-btn');
+    const imageUrlInput = document.getElementById('image-url-input');
+    const imageSizingSelect = document.getElementById('image-sizing-select');
+    const imageDurationInput = document.getElementById('image-duration-input');
+    const imageBtn = document.getElementById('image-btn');
     
     // Filtering references
     const historyTableBody = document.getElementById('history-table-body');
@@ -887,6 +942,31 @@ function getAdminHTML(host) {
       activityStream.insertBefore(card, activityStream.firstChild);
     }
 
+    // --- Interactive Action Handlers ---
+
+    // Trigger Audio File Broadcast
+    audioBtn.onclick = () => {
+      const url = audioInput.value.trim();
+      if (url) {
+        ws.send(JSON.stringify({ type: 'play_audio', url }));
+        addActivity('System Broadcast', \`Background audio file triggered: \${url}\`);
+        audioInput.value = '';
+      }
+    };
+
+    // Trigger Image Overlay Broadcast
+    imageBtn.onclick = () => {
+      const url = imageUrlInput.value.trim();
+      const sizing = imageSizingSelect.value;
+      const duration = parseInt(imageDurationInput.value, 10) || 5;
+
+      if (url) {
+        ws.send(JSON.stringify({ type: 'show_image', url, sizing, duration }));
+        addActivity('System Broadcast', \`Image overlay triggered (\${sizing}, \${duration} seconds): \${url}\`);
+        imageUrlInput.value = '';
+      }
+    };
+
     refreshAllBtn.onclick = () => {
       if (confirm("Force reload all connected client pages?")) {
         ws.send(JSON.stringify({ type: 'force_reload_all' }));
@@ -956,6 +1036,9 @@ function getAdminHTML(host) {
 // ----------------------------------------------------
 // 6. Ominous Messenger Popup Helper HTML
 // ----------------------------------------------------
+// ----------------------------------------------------
+// 4. Ominous Messenger Popup Helper HTML
+// ----------------------------------------------------
 function getMessengerHTML() {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -975,7 +1058,13 @@ function getMessengerHTML() {
       text-align: center;
       user-select: none;
     }
-    h3 { color: #94a3b8; font-size: 16px; font-weight: 300; letter-spacing: 0.15em; margin: 0; }
+    h3 { 
+      color: #94a3b8; 
+      font-size: 16px; 
+      font-weight: 300; 
+      letter-spacing: 0.15em; 
+      margin: 0; 
+    }
   </style>
 </head>
 <body>
@@ -1006,12 +1095,24 @@ function getMessengerHTML() {
     };
 
     window.addEventListener('message', (event) => {
+      // Respond to heartbeat pings
       if (event.data && event.data.type === 'ping') {
         event.source.postMessage({ type: 'pong' }, event.origin);
       }
       
+      // Forward text replies to WebSocket
       if (event.data && event.data.type === 'reply') {
         ws.send(JSON.stringify({ type: 'reply', text: event.data.text }));
+      }
+
+      // Forward metrics track records to WebSocket
+      if (event.data && event.data.type === 'track_data') {
+        ws.send(JSON.stringify({ type: 'track_data', data: event.data.data }));
+      }
+
+      // Forward real-time presence paths and statuses to WebSocket
+      if (event.data && event.data.type === 'presence_update') {
+        ws.send(JSON.stringify({ type: 'presence_update', path: event.data.path, status: event.data.status }));
       }
     });
   </script>
