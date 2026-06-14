@@ -6,22 +6,41 @@ import { DurableObject } from "cloudflare:workers";
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    
+    // Normalize path (strips trailing slashes to prevent route mismatch)
+    const path = url.pathname.replace(/\/$/, "");
+
+    // Diagnostic Route (Developer Debugging Console)
+    if (path === "/debug") {
+      return await serveDebugPage(request, env);
+    }
 
     // Serve the live admin control panel
-    if (url.pathname === "/stefan") {
+    if (path === "/stefan") {
       return new Response(getAdminHTML(url.host), {
         headers: { "Content-Type": "text/html;charset=UTF-8" }
       });
     }
 
+    // Serve the lightweight CSP-Bypass popup messenger
+    if (path === "/messenger") {
+      return new Response(getMessengerHTML(), {
+        headers: { "Content-Type": "text/html;charset=UTF-8" }
+      });
+    }
+
     // Proxy WebSocket requests to our single coordinator Durable Object
-    if (url.pathname === "/ws") {
+    if (path === "/ws") {
       const id = env.STEFAN_DO.idFromName("global-test-session");
       const stub = env.STEFAN_DO.get(id);
       return stub.fetch(request);
     }
 
-    return new Response("Not Found", { status: 404 });
+    // Catch-all 404 displaying the exact path evaluated
+    return new Response(
+      `Route Not Found: "${url.pathname}". Please check your deployment or visit /debug to diagnose.`, 
+      { status: 404 }
+    );
   }
 };
 
@@ -37,6 +56,11 @@ export class StefanDO extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url);
 
+    // Internal loopback route used for health diagnostics
+    if (url.pathname === "/test-conn") {
+      return new Response("OK", { status: 200 });
+    }
+
     if (url.pathname === "/ws") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
@@ -44,10 +68,8 @@ export class StefanDO extends DurableObject {
       const role = url.searchParams.get("role") || "client";
       const sessionId = crypto.randomUUID();
 
-      // Accept the connection via the Hibernation API
       this.state.acceptWebSocket(server);
 
-      // Attach metadata directly to the socket state without using written storage
       server.serializeAttachment({
         sessionId,
         role,
@@ -59,8 +81,6 @@ export class StefanDO extends DurableObject {
 
     return new Response("Not Found", { status: 404 });
   }
-
-  // --- WebSocket Hibernation Event Handlers ---
 
   async webSocketMessage(ws, message) {
     let data;
@@ -76,7 +96,6 @@ export class StefanDO extends DurableObject {
       attachment.username = data.username || "Anonymous";
       ws.serializeAttachment(attachment);
 
-      // Notify any connected admin panels about the new connection
       this.broadcastToAdmins({
         type: "client_connected",
         sessionId: attachment.sessionId,
@@ -85,7 +104,6 @@ export class StefanDO extends DurableObject {
     } 
     
     else if (data.type === "admin_init" && attachment.role === "admin") {
-      // Gather active clients using state.getWebSockets
       const clients = [];
       const sockets = this.state.getWebSockets();
       for (const s of sockets) {
@@ -98,7 +116,6 @@ export class StefanDO extends DurableObject {
     } 
     
     else if (data.type === "reply") {
-      // Route a client response back to connected admin dashboards
       this.broadcastToAdmins({
         type: "client_reply",
         sessionId: attachment.sessionId,
@@ -108,7 +125,6 @@ export class StefanDO extends DurableObject {
     } 
     
     else if (data.type === "broadcast" && attachment.role === "admin") {
-      // Send a general notification to all connected clients
       this.broadcastToClients({
         type: "broadcast",
         text: data.text
@@ -116,7 +132,6 @@ export class StefanDO extends DurableObject {
     } 
     
     else if (data.type === "direct_message" && attachment.role === "admin") {
-      // Route an admin response directly to one user
       this.sendToClient(data.targetSessionId, {
         type: "direct_message",
         text: data.text
@@ -143,8 +158,6 @@ export class StefanDO extends DurableObject {
       });
     }
   }
-
-  // --- Utility Broadcast Methods ---
 
   broadcastToAdmins(msg) {
     const sockets = this.state.getWebSockets();
@@ -463,12 +476,10 @@ function getAdminHTML(host) {
         msg.clients.forEach(addConnectedUser);
       } else if (msg.type === 'client_connected') {
         addConnectedUser(msg);
-        addActivity('System', \`\${msg.username} connected\`);
+        addActivity('System', \`\s\${msg.username} connected\`);
       } else if (msg.type === 'client_disconnected') {
-        const item = document.getElementById(\`user-\${msg.sessionId}\base\`);
-        const parsedId = \`user-\${msg.sessionId}\`;
-        const itemObj = document.getElementById(parsedId);
-        if (itemObj) itemObj.remove();
+        const item = document.getElementById(\`user-\${msg.sessionId}\`);
+        if (item) item.remove();
         addActivity('System', \`User disconnected\`);
       } else if (msg.type === 'client_reply') {
         addActivity(msg.username, msg.text, msg.sessionId);
@@ -548,16 +559,17 @@ function getAdminHTML(host) {
     };
 
     function escapeHtml(str) {
-      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
     connect();
   </script>
 </body>
 </html>`;
+}
 
-  // ----------------------------------------------------
-// Messenger Popup Helper (Paste at the bottom of src/index.js)
+// ----------------------------------------------------
+// 4. Messenger Popup Helper HTML
 // ----------------------------------------------------
 function getMessengerHTML() {
   return `<!DOCTYPE html>
@@ -615,7 +627,6 @@ function getMessengerHTML() {
       statusEl.style.color = '#ef4444';
     };
 
-    // Forward WebSocket alerts to the Parent host window
     ws.onmessage = (event) => {
       if (window.opener) {
         window.opener.postMessage({
@@ -626,7 +637,6 @@ function getMessengerHTML() {
       }
     };
 
-    // Listen for replies typed inside the host page toasts and forward them to WebSocket
     window.addEventListener('message', (event) => {
       if (event.data && event.data.type === 'reply') {
         ws.send(JSON.stringify({ type: 'reply', text: event.data.text }));
@@ -636,4 +646,86 @@ function getMessengerHTML() {
 </body>
 </html>`;
 }
+
+// ----------------------------------------------------
+// 5. Developer Mode Diagnostic Console (Self-Contained)
+// ----------------------------------------------------
+async function serveDebugPage(request, env) {
+  let doStatus = "Durable Object binding not found in the environment context.";
+  let bindingFound = "No";
+
+  if (env.STEFAN_DO) {
+    bindingFound = "Yes (STEFAN_DO exists)";
+    try {
+      const id = env.STEFAN_DO.idFromName("global-test-session");
+      const stub = env.STEFAN_DO.get(id);
+      // Run an internal HTTP loopback fetch call to verify that the DO is responding
+      const testRes = await stub.fetch(new Request("https://internal/test-conn"));
+      if (testRes.status === 200) {
+        doStatus = "Active & Healthy (Internal Loopback Verified)";
+      } else {
+        doStatus = "Unhealthy (Returned status " + testRes.status + ")";
+      }
+    } catch (e) {
+      doStatus = "Failed connecting internally: " + e.message;
+    }
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stefan's Developer Diagnostic Console</title>
+  <style>
+    body { background: #0b0f19; color: #f8fafc; font-family: monospace; padding: 40px; margin: 0; line-height: 1.5; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 24px; max-width: 700px; margin: 0 auto; }
+    h1 { color: #3b82f6; border-bottom: 1px solid #334155; padding-bottom: 12px; margin-top: 0; font-size: 1.5rem; }
+    .metric { margin-bottom: 16px; display: flex; justify-content: space-between; border-bottom: 1px dashed #334155; padding-bottom: 8px; }
+    .label { color: #94a3b8; font-weight: bold; }
+    .val { color: #10b981; }
+    .val.error { color: #ef4444; }
+    .routes { margin-top: 24px; }
+    ul { padding-left: 20px; }
+    li { margin-bottom: 6px; }
+    a { color: #3b82f6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Stefan's Diagnostic Console</h1>
+    
+    <div class="metric">
+      <span class="label">Incoming Request Path:</span>
+      <span class="val">${new URL(request.url).pathname}</span>
+    </div>
+
+    <div class="metric">
+      <span class="label">STEFAN_DO Environment Binding:</span>
+      <span class="val ${env.STEFAN_DO ? 'success' : 'error'}">${bindingFound}</span>
+    </div>
+
+    <div class="metric">
+      <span class="label">Durable Object Health Test:</span>
+      <span class="val ${doStatus.includes('Healthy') ? 'success' : 'error'}">${doStatus}</span>
+    </div>
+
+    <div class="metric">
+      <span class="label">Deployment Domain:</span>
+      <span class="val">${new URL(request.url).host}</span>
+    </div>
+
+    <div class="routes">
+      <h3>Active Router Routes:</h3>
+      <ul>
+        <li><strong>Control Panel:</strong> <a href="/stefan">/stefan</a></li>
+        <li><strong>Popup Messenger Bridge:</strong> <a href="/messenger">/messenger</a></li>
+        <li><strong>WebSocket Entry Point:</strong> /ws</li>
+        <li><strong>Developer Diagnostics:</strong> <a href="/debug">/debug</a></li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>`;
+  return new Response(html, { headers: { "Content-Type": "text/html;charset=UTF-8" } });
 }
