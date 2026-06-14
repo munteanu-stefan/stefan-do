@@ -1,24 +1,22 @@
 import { DurableObject } from "cloudflare:workers";
 
 // ----------------------------------------------------
-// 1. Authentication Helper
+// 1. Session Cookie Helpers
 // ----------------------------------------------------
-function authenticate(request, env) {
-  const authHeader = request.headers.get("Authorization");
-  if (!authHeader) return false;
-
-  const [scheme, encoded] = authHeader.split(" ");
-  if (scheme !== "Basic") return false;
-
-  try {
-    const decoded = atob(encoded);
-    const [username, password] = decoded.split(":");
-    // Validate entering password against DASHBOARD_PASS environment secret
-    const passSecret = env.DASHBOARD_PASS || "default-fallback-pass";
-    return password === passSecret;
-  } catch (e) {
-    return false;
+function getCookie(request, name) {
+  const cookieString = request.headers.get("Cookie");
+  if (!cookieString) return null;
+  const cookies = cookieString.split(";").map(c => c.trim());
+  for (const cookie of cookies) {
+    const [key, value] = cookie.split("=");
+    if (key === name) return value;
   }
+  return null;
+}
+
+function verifySession(request, env) {
+  const session = getCookie(request, "stefan_session");
+  return session === "authorized";
 }
 
 // ----------------------------------------------------
@@ -29,14 +27,37 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/$/, "");
 
-    // Secure administrative panel route
+    // Secure administrative panel routes
     if (path === "/stefan") {
-      if (!authenticate(request, env)) {
-        return new Response("Unauthorized", {
-          status: 401,
-          headers: { "WWW-Authenticate": 'Basic realm="Stefan Admin Dashboard"' }
+      if (request.method === "POST") {
+        const formData = await request.formData();
+        const password = formData.get("password");
+        const passSecret = env.DASHBOARD_PASS || "default-fallback-pass";
+
+        if (password === passSecret) {
+          // Password verified. Set cookie (12 Hours) and perform 303 Redirect to GET /stefan
+          return new Response(null, {
+            status: 303,
+            headers: {
+              "Location": "/stefan",
+              "Set-Cookie": "stefan_session=authorized; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Strict"
+            }
+          });
+        } else {
+          // Render login page with an incorrect password error notice
+          return new Response(getLoginHTML(true), {
+            headers: { "Content-Type": "text/html;charset=UTF-8" }
+          });
+        }
+      }
+
+      // Handle standard GET request for admin page
+      if (!verifySession(request, env)) {
+        return new Response(getLoginHTML(false), {
+          headers: { "Content-Type": "text/html;charset=UTF-8" }
         });
       }
+
       return new Response(getAdminHTML(url.host), {
         headers: { "Content-Type": "text/html;charset=UTF-8" }
       });
@@ -53,8 +74,8 @@ export default {
     if (path === "/ws") {
       const role = url.searchParams.get("role") || "client";
       
-      // Enforce security lock on admin web sockets
-      if (role === "admin" && !authenticate(request, env)) {
+      // Enforce security lock on admin web sockets via cookie
+      if (role === "admin" && !verifySession(request, env)) {
         return new Response("Unauthorized", { status: 401 });
       }
 
@@ -68,7 +89,7 @@ export default {
 };
 
 // ----------------------------------------------------
-// 3. Durable Object with Persistent Local Storage
+// 3. Durable Object utilizing Hibernation API
 // ----------------------------------------------------
 export class StefanDO extends DurableObject {
   constructor(state, env) {
@@ -296,7 +317,83 @@ export class StefanDO extends DurableObject {
 }
 
 // ----------------------------------------------------
-// 4. Admin Control Panel Template
+// 4. Secure 12-Hour Login Form HTML
+// ----------------------------------------------------
+function getLoginHTML(hasError = false) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stefan - Authorization Required</title>
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --card-bg: #1e293b;
+      --border-color: #334155;
+      --text-color: #f8fafc;
+      --accent: #3b82f6;
+    }
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 32px;
+      width: 100%;
+      max-width: 400px;
+      box-sizing: border-box;
+      text-align: center;
+    }
+    h2 { margin-top: 0; margin-bottom: 24px; font-size: 1.5rem; font-weight: 600; }
+    form { display: flex; flex-direction: column; gap: 16px; }
+    input[type="password"] {
+      background: #0f172a;
+      border: 1px solid var(--border-color);
+      color: var(--text-color);
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 1rem;
+      outline: none;
+    }
+    input[type="password"]:focus { border-color: var(--accent); }
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #2563eb; }
+    .error { color: #ef4444; font-size: 0.875rem; margin-top: -8px; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Authorization Required</h2>
+    \${hasError ? '<div class="error">Incorrect password. Please try again.</div>' : ''}
+    <form method="POST" action="/stefan">
+      <input type="password" name="password" placeholder="Enter dashboard password" required autocomplete="current-password" autofocus>
+      <button type="submit">Verify</button>
+    </form>
+  </div>
+</body>
+</html>`;
+}
+
+// ----------------------------------------------------
+// 5. Admin Panel HTML Template (with Date Range Filter)
 // ----------------------------------------------------
 function getAdminHTML(host) {
   return `<!DOCTYPE html>
@@ -355,8 +452,8 @@ function getAdminHTML(host) {
     .form-group { display: flex; flex-direction: column; gap: 8px; }
     .form-group label { font-size: 0.875rem; font-weight: 500; }
     .input-row { display: flex; gap: 12px; }
-    input[type="text"] { flex: 1; background-color: #0f172a; border: 1px solid var(--border-color); color: var(--text-color); padding: 12px 16px; border-radius: 8px; font-size: 0.95rem; outline: none; transition: border-color 0.15s ease; }
-    input[type="text"]:focus { border-color: var(--accent); }
+    input[type="text"], input[type="date"], select { background-color: #0f172a; border: 1px solid var(--border-color); color: var(--text-color); padding: 12px 16px; border-radius: 8px; font-size: 0.95rem; outline: none; transition: border-color 0.15s ease; box-sizing: border-box; }
+    input[type="text"]:focus, input[type="date"]:focus, select:focus { border-color: var(--accent); }
     button { background-color: var(--accent); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: background-color 0.15s ease; }
     button:hover { background-color: var(--accent-hover); }
     button.danger-btn { background-color: var(--danger); }
@@ -420,6 +517,35 @@ function getAdminHTML(host) {
       <!-- 3. Historical Analytics Ledger -->
       <div class="section-card">
         <h3>Productivity Ledger (Daily Metrics)</h3>
+        
+        <!-- Interactive Date Range & User Filter Panel -->
+        <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 20px;">
+          <div class="form-group" style="flex: 1; min-width: 140px;">
+            <label for="start-date" style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Start Date</label>
+            <input type="date" id="start-date" style="width: 100%;">
+          </div>
+          <div class="form-group" style="flex: 1; min-width: 140px;">
+            <label for="end-date" style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">End Date</label>
+            <input type="date" id="end-date" style="width: 100%;">
+          </div>
+          <div class="form-group" style="flex: 1; min-width: 140px;">
+            <label for="user-filter" style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Filter User</label>
+            <select id="user-filter" style="width: 100%;">
+              <option value="all">All Users</option>
+            </select>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button id="filter-btn" style="padding: 10px 16px; font-size: 0.9rem;">Filter & Compile</button>
+            <button id="reset-filter-btn" style="padding: 10px 16px; font-size: 0.9rem; background: #1e293b; border: 1px solid var(--border-color); color: var(--text-muted);">Reset</button>
+          </div>
+        </div>
+
+        <!-- Compiled Report Summary Card -->
+        <div id="compiled-summary-card" style="display: none; background: rgba(59, 130, 246, 0.05); border: 1px dashed var(--accent); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+          <h4 style="margin-top: 0; margin-bottom: 10px; color: var(--accent); font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em;">Compiled Report Summary</h4>
+          <div id="compiled-summary-text" style="font-size: 0.9rem; line-height: 1.6; color: var(--text-color);"></div>
+        </div>
+
         <table>
           <thead>
             <tr>
@@ -458,12 +584,24 @@ function getAdminHTML(host) {
     const whisperInput = document.getElementById('whisper-input');
     const whisperBtn = document.getElementById('whisper-btn');
     const refreshAllBtn = document.getElementById('refresh-all-btn');
+    
+    // Filtering references
     const historyTableBody = document.getElementById('history-table-body');
+    const startDateInput = document.getElementById('start-date');
+    const endDateInput = document.getElementById('end-date');
+    const userFilterSelect = document.getElementById('user-filter');
+    const filterBtn = document.getElementById('filter-btn');
+    const resetFilterBtn = document.getElementById('reset-filter-btn');
+    const compiledSummaryCard = document.getElementById('compiled-summary-card');
+    const compiledSummaryText = document.getElementById('compiled-summary-text');
+    
     const statusIndicator = document.getElementById('status-indicator');
     const statusText = document.getElementById('status-text');
 
     let ws;
     let selectedUser = null; 
+    let rawHistory = []; // Global in-memory storage of synced logs
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = \`\${protocol}//\${window.location.host}/ws?role=admin\`;
 
@@ -505,7 +643,9 @@ function getAdminHTML(host) {
       } else if (msg.type === 'client_reply') {
         addActivity(msg.username, msg.text, msg.sessionId);
       } else if (msg.type === 'history_list') {
-        renderHistoryTable(msg.history);
+        rawHistory = msg.history;
+        populateUserDropdown(rawHistory);
+        renderHistoryTable(rawHistory);
       }
     }
 
@@ -565,13 +705,103 @@ function getAdminHTML(host) {
       whisperInput.placeholder = "Select a user to enable direct messaging...";
     }
 
+    // --- Dynamic Analytics Logic ---
+
+    function populateUserDropdown(history) {
+      const currentSelected = userFilterSelect.value;
+      const uniqueUsers = [...new Set(history.map(row => row.user))];
+      uniqueUsers.sort();
+
+      userFilterSelect.innerHTML = '<option value="all">All Users</option>';
+      uniqueUsers.forEach(user => {
+        const option = document.createElement('option');
+        option.value = user;
+        option.textContent = user;
+        userFilterSelect.appendChild(option);
+      });
+
+      if (uniqueUsers.includes(currentSelected)) {
+        userFilterSelect.value = currentSelected;
+      }
+    }
+
+    filterBtn.onclick = () => {
+      const start = startDateInput.value;
+      const end = endDateInput.value;
+      const user = userFilterSelect.value;
+
+      let filtered = [...rawHistory];
+
+      if (start) {
+        filtered = filtered.filter(row => row.date >= start);
+      }
+      if (end) {
+        filtered = filtered.filter(row => row.date <= end);
+      }
+      if (user !== "all") {
+        filtered = filtered.filter(row => row.user === user);
+      }
+
+      renderHistoryTable(filtered);
+      compileSummary(filtered, start, end, user);
+    };
+
+    resetFilterBtn.onclick = () => {
+      startDateInput.value = "";
+      endDateInput.value = "";
+      userFilterSelect.value = "all";
+      compiledSummaryCard.style.display = "none";
+      renderHistoryTable(rawHistory);
+    };
+
+    function compileSummary(filtered, start, end, user) {
+      if (filtered.length === 0) {
+        compiledSummaryCard.style.display = "none";
+        return;
+      }
+
+      let totalKyc = 0;
+      let totalProcessing = 0;
+      let totalAudit = 0;
+      let totalIdle = 0;
+
+      filtered.forEach(row => {
+        totalKyc += (row.kyc || 0);
+        totalProcessing += (row.processing || 0);
+        totalAudit += (row.audit || 0);
+        totalIdle += (row.idle || 0);
+      });
+
+      const kycMin = (totalKyc / 60).toFixed(1);
+      const procMin = (totalProcessing / 60).toFixed(1);
+      const auditMin = (totalAudit / 60).toFixed(1);
+      const idleMin = (totalIdle / 60).toFixed(1);
+      const totalActiveMin = ((totalKyc + totalProcessing + totalAudit) / 60).toFixed(1);
+
+      const periodString = (start || "Beginning") + " to " + (end || "Latest");
+      const userString = user === "all" ? "All Users" : user;
+
+      compiledSummaryText.innerHTML = \`
+        <strong>Target Identity:</strong> \${escapeHtml(userString)}<br>
+        <strong>Accumulation Period:</strong> \${periodString}<br>
+        <strong>Path Breakdowns:</strong><br>
+        • /kyc: <strong style="color:var(--accent);">\${kycMin} minutes</strong><br>
+        • /processing: <strong style="color:var(--accent);">\${procMin} minutes</strong><br>
+        • /audit: <strong style="color:var(--accent);">\${auditMin} minutes</strong><br>
+        • Passive Idle: <strong style="color:#f59e0b;">\${idleMin} minutes</strong><br>
+        <strong>Total Active Workspace Productivity:</strong> <strong style="color:var(--success); font-size:1.05rem;">\${totalActiveMin} minutes</strong>
+      \`;
+
+      compiledSummaryCard.style.display = "block";
+    }
+
     function renderHistoryTable(history) {
       if (!history || history.length === 0) {
         historyTableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">No metrics compiled yet.</td></tr>';
         return;
       }
 
-      // Sort logs by date desc, then user asc
+      // Sort chronological descend, then alphabetical
       history.sort((a, b) => {
         if (a.date !== b.date) return b.date.localeCompare(a.date);
         return a.user.localeCompare(b.user);
@@ -591,7 +821,7 @@ function getAdminHTML(host) {
             <td>\${kycMin}m</td>
             <td>\${procMin}m</td>
             <td>\${auditMin}m</td>
-            <td style="color: #f59e0b;">\${idleMin}m</td>
+            <td style="color:#f59e0b;">\${idleMin}m</td>
             <td style="font-weight:600; color:var(--success);">\${totalActiveMin}m</td>
           </tr>
         \`;
@@ -692,7 +922,7 @@ function getAdminHTML(host) {
 }
 
 // ----------------------------------------------------
-// 5. Ominous Messenger Popup Helper HTML
+// 6. Ominous Messenger Popup Helper HTML
 // ----------------------------------------------------
 function getMessengerHTML() {
   return `<!DOCTYPE html>
@@ -744,12 +974,10 @@ function getMessengerHTML() {
     };
 
     window.addEventListener('message', (event) => {
-      // Respond immediately to the parent's heartbeat ping to bypass background throttling
       if (event.data && event.data.type === 'ping') {
         event.source.postMessage({ type: 'pong' }, event.origin);
       }
       
-      // Receive replies from parent and push to WebSocket
       if (event.data && event.data.type === 'reply') {
         ws.send(JSON.stringify({ type: 'reply', text: event.data.text }));
       }
