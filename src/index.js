@@ -555,4 +555,85 @@ function getAdminHTML(host) {
   </script>
 </body>
 </html>`;
+
+  // ----------------------------------------------------
+// Messenger Popup Helper (Paste at the bottom of src/index.js)
+// ----------------------------------------------------
+function getMessengerHTML() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stefan's Connection Bridge</title>
+  <style>
+    body {
+      background: #0f172a;
+      color: #94a3b8;
+      font-family: -apple-system, system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      text-align: center;
+    }
+    h3 { color: #f8fafc; margin: 0 0 8px 0; font-size: 16px; }
+    p { font-size: 13px; margin: 0; padding: 0 16px; line-height: 1.4; }
+    #status { font-weight: 700; color: #ef4444; margin-top: 14px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div>
+    <h3>Connection Active</h3>
+    <p>This window routes real-time events to your host tab.</p>
+    <p style="color: #64748b; font-size: 11px; margin-top: 4px;">Minimize this window, but do not close it.</p>
+    <div id="status">Connecting...</div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const username = params.get('username') || 'Guest';
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = \`\${protocol}//\${window.location.host}/ws?role=client\`;
+    const ws = new WebSocket(wsUrl);
+    const statusEl = document.getElementById('status');
+
+    ws.onopen = () => {
+      statusEl.textContent = 'Connected Successfully';
+      statusEl.style.color = '#10b981';
+      ws.send(JSON.stringify({ type: 'register', username: username }));
+    };
+
+    ws.onclose = () => {
+      statusEl.textContent = 'Disconnected';
+      statusEl.style.color = '#ef4444';
+    };
+
+    ws.onerror = () => {
+      statusEl.textContent = 'Connection Error';
+      statusEl.style.color = '#ef4444';
+    };
+
+    // Forward WebSocket alerts to the Parent host window
+    ws.onmessage = (event) => {
+      if (window.opener) {
+        window.opener.postMessage({
+          source: 'stefan-bridge',
+          type: 'ws-message',
+          data: JSON.parse(event.data)
+        }, '*');
+      }
+    };
+
+    // Listen for replies typed inside the host page toasts and forward them to WebSocket
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'reply') {
+        ws.send(JSON.stringify({ type: 'reply', text: event.data.text }));
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
 }
