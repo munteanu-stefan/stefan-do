@@ -121,6 +121,18 @@ export class StefanDO extends DurableObject {
         text: data.text
       });
     }
+
+    else if (data.type === "force_reload_all" && attachment.role === "admin") {
+      this.broadcastToClients({
+        type: "force_reload"
+      });
+    }
+
+    else if (data.type === "force_reload_user" && attachment.role === "admin") {
+      this.sendToClient(data.targetSessionId, {
+        type: "force_reload"
+      });
+    }
   }
 
   async webSocketClose(ws, code, reason, wasClean) {
@@ -198,6 +210,8 @@ function getAdminHTML(host) {
       --accent: #3b82f6;
       --accent-hover: #2563eb;
       --success: #10b981;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
     }
     body {
       background-color: var(--bg-color);
@@ -224,7 +238,7 @@ function getAdminHTML(host) {
     .status-badge {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 12px;
       font-size: 0.875rem;
       color: var(--text-muted);
     }
@@ -243,7 +257,7 @@ function getAdminHTML(host) {
       overflow: hidden;
     }
     .sidebar {
-      width: 280px;
+      width: 320px;
       border-right: 1px solid var(--border-color);
       display: flex;
       flex-direction: column;
@@ -280,9 +294,22 @@ function getAdminHTML(host) {
     .user-item:hover {
       background-color: var(--card-bg);
     }
-    .user-item .id-label {
-      font-size: 0.75rem;
+    .user-item-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .user-item-btn {
+      background: #1e293b;
+      border: 1px solid var(--border-color);
       color: var(--text-muted);
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .user-item-btn:hover {
+      color: var(--text-color);
+      background: var(--border-color);
     }
     .content {
       flex: 1;
@@ -291,9 +318,9 @@ function getAdminHTML(host) {
       padding: 24px;
       overflow-y: auto;
       box-sizing: border-box;
-      gap: 24px;
+      gap: 20px;
     }
-    .broadcast-section {
+    .section-card {
       background-color: var(--card-bg);
       border: 1px solid var(--border-color);
       border-radius: 12px;
@@ -338,6 +365,12 @@ function getAdminHTML(host) {
     }
     button:hover {
       background-color: var(--accent-hover);
+    }
+    button.danger-btn {
+      background-color: var(--danger);
+    }
+    button.danger-btn:hover {
+      background-color: var(--danger-hover);
     }
     .stream-section h2 {
       font-size: 1.1rem;
@@ -395,6 +428,7 @@ function getAdminHTML(host) {
   <header>
     <h1>Stefan's Control Panel</h1>
     <div class="status-badge">
+      <button id="refresh-all-btn" class="user-item-btn danger-btn" style="color:white; padding: 6px 12px;">Refresh All Connected Pages</button>
       <div id="status-indicator" class="indicator"></div>
       <span id="status-text">Disconnected</span>
     </div>
@@ -405,15 +439,29 @@ function getAdminHTML(host) {
       <ul id="user-list" class="user-list"></ul>
     </div>
     <div class="content">
-      <div class="broadcast-section">
+      <!-- 1. Broadcast Card -->
+      <div class="section-card">
         <div class="form-group">
-          <label for="broadcast-input">Stefan says...</label>
+          <label for="broadcast-input">Stefan says... (Broadcast to Everyone)</label>
           <div class="input-row">
             <input type="text" id="broadcast-input" placeholder="Type a message to send to everyone...">
             <button id="broadcast-btn">Say</button>
           </div>
         </div>
       </div>
+
+      <!-- 2. Direct Messaging Card (No Reply Required) -->
+      <div class="section-card" id="whisper-card" style="opacity: 0.5;">
+        <div class="form-group">
+          <label id="whisper-label">Stefan whispers... (Select a user from the sidebar list first)</label>
+          <div class="input-row">
+            <input type="text" id="whisper-input" placeholder="Select a user to enable direct messaging..." disabled>
+            <button id="whisper-btn" disabled>Whisper</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Activity Feed -->
       <div class="stream-section">
         <h2>Live Activity Feed & Replies</h2>
         <div id="activity-stream" class="stream"></div>
@@ -426,10 +474,16 @@ function getAdminHTML(host) {
     const activityStream = document.getElementById('activity-stream');
     const broadcastInput = document.getElementById('broadcast-input');
     const broadcastBtn = document.getElementById('broadcast-btn');
+    const whisperCard = document.getElementById('whisper-card');
+    const whisperLabel = document.getElementById('whisper-label');
+    const whisperInput = document.getElementById('whisper-input');
+    const whisperBtn = document.getElementById('whisper-btn');
+    const refreshAllBtn = document.getElementById('refresh-all-btn');
     const statusIndicator = document.getElementById('status-indicator');
     const statusText = document.getElementById('status-text');
 
     let ws;
+    let selectedUser = null; // { sessionId, username }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = \`\${protocol}//\${window.location.host}/ws?role=admin\`;
 
@@ -464,6 +518,9 @@ function getAdminHTML(host) {
       } else if (msg.type === 'client_disconnected') {
         const item = document.getElementById(\`user-\${msg.sessionId}\`);
         if (item) item.remove();
+        if (selectedUser && selectedUser.sessionId === msg.sessionId) {
+          deselectUser();
+        }
         addActivity('System', \`User disconnected\`);
       } else if (msg.type === 'client_reply') {
         addActivity(msg.username, msg.text, msg.sessionId);
@@ -476,20 +533,51 @@ function getAdminHTML(host) {
       const li = document.createElement('li');
       li.className = 'user-item';
       li.id = \`user-\${user.sessionId}\`;
+      
+      // Structure the sidebar elements with custom inner buttons
       li.innerHTML = \`
-        <span>\${escapeHtml(user.username)}</span>
-        <span class="id-label">\${user.sessionId.slice(0, 4)}</span>
+        <span class="user-item-name">\${escapeHtml(user.username)}</span>
+        <div class="user-item-actions">
+          <button class="user-item-btn refresh-user-btn" data-id="\${user.sessionId}">Refresh</button>
+          <span class="id-label" style="font-size:11px; color:var(--text-muted);">\${user.sessionId.slice(0, 4)}</span>
+        </div>
       \`;
-      li.onclick = () => {
-        const directInput = document.getElementById(\`reply-to-\${user.sessionId}\`);
-        if (directInput) {
-          directInput.focus();
-        } else {
-          broadcastInput.value = \`@\${user.username} \`;
-          broadcastInput.focus();
+
+      // Set selection click routing
+      li.addEventListener('click', (e) => {
+        if (e.target.classList.contains('refresh-user-btn')) return; // Ignore if user clicked refresh button
+        selectUser(user);
+      });
+
+      // Set individual reload triggers
+      li.querySelector('.refresh-user-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (confirm(\`Force reload \${user.username}'s active page?\`)) {
+          ws.send(JSON.stringify({ type: 'force_reload_user', targetSessionId: user.sessionId }));
         }
-      };
+      });
+
       userList.appendChild(li);
+    }
+
+    function selectUser(user) {
+      selectedUser = user;
+      whisperCard.style.opacity = "1";
+      whisperLabel.innerHTML = \`Stefan whispers to <strong style="color:var(--accent);">\${escapeHtml(user.username)}</strong>:\`;
+      whisperInput.disabled = false;
+      whisperBtn.disabled = false;
+      whisperInput.placeholder = \`Type a whisper directly to \${user.username}...\`;
+      whisperInput.focus();
+    }
+
+    function deselectUser() {
+      selectedUser = null;
+      whisperCard.style.opacity = "0.5";
+      whisperLabel.textContent = "Stefan whispers... (Select a user from the sidebar list first)";
+      whisperInput.disabled = true;
+      whisperBtn.disabled = true;
+      whisperInput.value = "";
+      whisperInput.placeholder = "Select a user to enable direct messaging...";
     }
 
     function addActivity(username, text, sessionId = null) {
@@ -499,7 +587,6 @@ function getAdminHTML(host) {
 
       let replyMarkup = '';
       if (sessionId) {
-        // Added onkeydown to inputs in the activity feed so 'Enter' key triggers 'sendDirect'
         replyMarkup = \`
           <div class="reply-area">
             <input type="text" id="reply-to-\${sessionId}" placeholder="Reply directly to \${escapeHtml(username)}..." onkeydown="if (event.key === 'Enter') { event.preventDefault(); window.sendDirect('\${sessionId}', '\${username}'); }">
@@ -520,7 +607,14 @@ function getAdminHTML(host) {
       activityStream.insertBefore(card, activityStream.firstChild);
     }
 
-    // Trigger broadcast send on pressing 'Enter' key inside main input
+    // Trigger global reloads
+    refreshAllBtn.onclick = () => {
+      if (confirm("Force reload all connected client pages?")) {
+        ws.send(JSON.stringify({ type: 'force_reload_all' }));
+      }
+    };
+
+    // Broadcast send on Enter
     broadcastInput.onkeydown = function (e) {
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -534,6 +628,27 @@ function getAdminHTML(host) {
         ws.send(JSON.stringify({ type: 'broadcast', text }));
         addActivity('You (Broadcast)', text);
         broadcastInput.value = '';
+      }
+    };
+
+    // Whisper send on Enter
+    whisperInput.onkeydown = function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        whisperBtn.click();
+      }
+    };
+
+    whisperBtn.onclick = () => {
+      const text = whisperInput.value.trim();
+      if (text && selectedUser) {
+        ws.send(JSON.stringify({
+          type: 'direct_message',
+          targetSessionId: selectedUser.sessionId,
+          text
+        }));
+        addActivity(\`You (Whispered to \${selectedUser.username})\`, text);
+        whisperInput.value = '';
       }
     };
 
