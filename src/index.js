@@ -125,7 +125,9 @@ export class StefanDO extends DurableObject {
 
   // --- WebSocket Event Forwarding & Storage Handlers ---
 
- async webSocketMessage(ws, message) {
+ // --- WebSocket Event Forwarding & Storage Handlers ---
+
+  async webSocketMessage(ws, message) {
     let data;
     try {
       data = JSON.parse(message);
@@ -220,6 +222,102 @@ export class StefanDO extends DurableObject {
       });
     }
   }
+
+  // --- Durable Object Class Helper Methods ---
+
+  broadcastToAdmins(msg) {
+    const sockets = this.state.getWebSockets();
+    const payload = JSON.stringify(msg);
+    for (const ws of sockets) {
+      const att = ws.deserializeAttachment();
+      if (att && att.role === "admin") {
+        ws.send(payload);
+      }
+    }
+  }
+
+  broadcastToClients(msg) {
+    const sockets = this.state.getWebSockets();
+    const payload = JSON.stringify(msg);
+    for (const ws of sockets) {
+      const att = ws.deserializeAttachment();
+      if (att && att.role === "client") {
+        ws.send(payload);
+      }
+    }
+  }
+
+  sendToClient(sessionId, msg) {
+    const sockets = this.state.getWebSockets();
+    const payload = JSON.stringify(msg);
+    for (const ws of sockets) {
+      const att = ws.deserializeAttachment();
+      if (att && att.role === "client" && att.sessionId === sessionId) {
+        ws.send(payload);
+        break;
+      }
+    }
+  }
+
+  notifyAdminsOfClientUpdate() {
+    const clients = [];
+    const sockets = this.state.getWebSockets();
+    for (const s of sockets) {
+      const att = s.deserializeAttachment();
+      if (att && att.role === "client") {
+        clients.push({ 
+          sessionId: att.sessionId, 
+          username: att.username,
+          path: att.path,
+          status: att.status
+        });
+      }
+    }
+    this.broadcastToAdmins({ type: "client_list", clients });
+  }
+
+  async notifyAdminsOfHistoricalUpdate() {
+    const historyList = [];
+    const logs = await this.state.storage.list({ prefix: "user:" });
+    for (const [key, val] of logs.entries()) {
+      const parts = key.split(":");
+      const user = parts[1];
+      const date = parts[3];
+      historyList.push({ user, date, ...val });
+    }
+    this.broadcastToAdmins({ type: "history_list", history: historyList });
+  }
+
+  async sendInitialAdminPayload(ws) {
+    // 1. Gather active users grid
+    const clients = [];
+    const sockets = this.state.getWebSockets();
+    for (const s of sockets) {
+      const att = s.deserializeAttachment();
+      if (att && att.role === "client") {
+        clients.push({ 
+          sessionId: att.sessionId, 
+          username: att.username,
+          path: att.path,
+          status: att.status
+        });
+      }
+    }
+
+    // 2. Fetch all historical metric logs
+    const historyList = [];
+    const logs = await this.state.storage.list({ prefix: "user:" });
+    for (const [key, val] of logs.entries()) {
+      const parts = key.split(":");
+      const user = parts[1];
+      const date = parts[3];
+      historyList.push({ user, date, ...val });
+    }
+
+    ws.send(JSON.stringify({ type: "client_list", clients }));
+    ws.send(JSON.stringify({ type: "history_list", history: historyList }));
+  }
+} // <-- This brace closes the StefanDO class correctly
 
 // ----------------------------------------------------
 // 4. Secure 12-Hour Login Form HTML
