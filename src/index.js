@@ -395,6 +395,9 @@ function getLoginHTML(hasError = false) {
 // ----------------------------------------------------
 // 5. Admin Panel HTML Template (with Date Range Filter)
 // ----------------------------------------------------
+// ----------------------------------------------------
+// 3. Admin Panel HTML Template
+// ----------------------------------------------------
 function getAdminHTML(host) {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -452,8 +455,37 @@ function getAdminHTML(host) {
     .form-group { display: flex; flex-direction: column; gap: 8px; }
     .form-group label { font-size: 0.875rem; font-weight: 500; }
     .input-row { display: flex; gap: 12px; }
-    input[type="text"], input[type="date"], select { background-color: #0f172a; border: 1px solid var(--border-color); color: var(--text-color); padding: 12px 16px; border-radius: 8px; font-size: 0.95rem; outline: none; transition: border-color 0.15s ease; box-sizing: border-box; }
-    input[type="text"]:focus, input[type="date"]:focus, select:focus { border-color: var(--accent); }
+    
+    /* Input layout rules kept explicitly separated to prevent shrinking */
+    input[type="text"] {
+      flex: 1;
+      background-color: #0f172a;
+      border: 1px solid var(--border-color);
+      color: var(--text-color);
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+    input[type="date"], select {
+      background-color: #0f172a;
+      border: 1px solid var(--border-color);
+      color: var(--text-color);
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s ease;
+      box-sizing: border-box;
+    }
+    input[type="date"]:focus, select:focus {
+      border-color: var(--accent);
+    }
+
     button { background-color: var(--accent); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: background-color 0.15s ease; }
     button:hover { background-color: var(--accent-hover); }
     button.danger-btn { background-color: var(--danger); }
