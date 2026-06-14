@@ -503,6 +503,14 @@ function getAdminHTML(host) {
     button.danger-btn { background-color: var(--danger); }
     button.danger-btn:hover { background-color: var(--danger-hover); }
 
+    .section-card, details { 
+      background-color: var(--card-bg); 
+      border: 1px solid var(--border-color); 
+      border-radius: 12px; 
+      padding: 20px; 
+      flex-shrink: 0; /* Prevents containers from shrinking when activity stream grows */
+    }
+
     /* Collapsible styles */
     details { border: 1px solid var(--border-color); border-radius: 8px; background: #131d31; margin-top: 10px; overflow: hidden; }
     summary { padding: 14px 20px; font-weight: 600; cursor: pointer; background: var(--card-bg); user-select: none; font-size: 0.95rem; outline: none; }
@@ -1026,7 +1034,7 @@ function getAdminHTML(host) {
           sizing, 
           duration 
         }));
-        addActivity('Whispered Action', \`Overlay displayed to \${selectedUser.username} (\${sizing}, \${duration} seconds): \${url}\`);
+        addActivity('Whispered Action', \`Overlay displayed to \${selectedUser.username} (\&nbsp;\${sizing}, \${duration} seconds): \${url}\`);
         imageUrlInput.value = '';
       }
     };
@@ -1100,6 +1108,9 @@ function getAdminHTML(host) {
 // ----------------------------------------------------
 // 4. Ominous Messenger Popup Helper HTML
 // ----------------------------------------------------
+// ----------------------------------------------------
+// 4. Ominous Messenger Popup Helper HTML
+// ----------------------------------------------------
 function getMessengerHTML() {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1137,6 +1148,10 @@ function getMessengerHTML() {
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'register', username: username }));
+      if (window.opener) {
+        // Notify parent tab that connection is established
+        window.opener.postMessage({ source: 'stefan-bridge', type: 'connected' }, '*');
+      }
     };
 
     ws.onmessage = (event) => {
