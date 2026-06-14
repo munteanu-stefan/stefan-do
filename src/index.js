@@ -499,9 +499,10 @@ function getAdminHTML(host) {
 
       let replyMarkup = '';
       if (sessionId) {
+        // Added onkeydown to inputs in the activity feed so 'Enter' key triggers 'sendDirect'
         replyMarkup = \`
           <div class="reply-area">
-            <input type="text" id="reply-to-\${sessionId}" placeholder="Reply directly to \${escapeHtml(username)}...">
+            <input type="text" id="reply-to-\${sessionId}" placeholder="Reply directly to \${escapeHtml(username)}..." onkeydown="if (event.key === 'Enter') { event.preventDefault(); window.sendDirect('\${sessionId}', '\${username}'); }">
             <button onclick="sendDirect('\${sessionId}', '\${username}')">Send Reply</button>
           </div>
         \`;
@@ -518,6 +519,14 @@ function getAdminHTML(host) {
 
       activityStream.insertBefore(card, activityStream.firstChild);
     }
+
+    // Trigger broadcast send on pressing 'Enter' key inside main input
+    broadcastInput.onkeydown = function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        broadcastBtn.click();
+      }
+    };
 
     broadcastBtn.onclick = () => {
       const text = broadcastInput.value.trim();
