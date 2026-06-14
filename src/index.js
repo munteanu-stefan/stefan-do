@@ -221,116 +221,6 @@ export class StefanDO extends DurableObject {
     }
   }
 
-  async webSocketClose(ws, code, reason, wasClean) {
-    const attachment = ws.deserializeAttachment();
-    if (attachment && attachment.role === "client") {
-      this.notifyAdminsOfClientUpdate();
-    }
-  }
-
-  async webSocketError(ws, error) {
-    const attachment = ws.deserializeAttachment();
-    if (attachment && attachment.role === "client") {
-      this.notifyAdminsOfClientUpdate();
-    }
-  }
-
-  // --- Dispatch Utilities ---
-
-  async sendInitialAdminPayload(ws) {
-    // 1. Gather active users grid
-    const clients = [];
-    const sockets = this.state.getWebSockets();
-    for (const s of sockets) {
-      const att = s.deserializeAttachment();
-      if (att && att.role === "client") {
-        clients.push({ 
-          sessionId: att.sessionId, 
-          username: att.username,
-          path: att.path,
-          status: att.status
-        });
-      }
-    }
-
-    // 2. Fetch all historical metric logs
-    const historyList = [];
-    const logs = await this.state.storage.list({ prefix: "user:" });
-    for (const [key, val] of logs.entries()) {
-      const parts = key.split(":");
-      const user = parts[1];
-      const date = parts[3];
-      historyList.push({ user, date, ...val });
-    }
-
-    ws.send(JSON.stringify({ type: "client_list", clients }));
-    ws.send(JSON.stringify({ type: "history_list", history: historyList }));
-  }
-
-  notifyAdminsOfClientUpdate() {
-    const clients = [];
-    const sockets = this.state.getWebSockets();
-    for (const s of sockets) {
-      const att = s.deserializeAttachment();
-      if (att && att.role === "client") {
-        clients.push({ 
-          sessionId: att.sessionId, 
-          username: att.username,
-          path: att.path,
-          status: att.status
-        });
-      }
-    }
-    this.broadcastToAdmins({ type: "client_list", clients });
-  }
-
-  async notifyAdminsOfHistoricalUpdate() {
-    const historyList = [];
-    const logs = await this.state.storage.list({ prefix: "user:" });
-    for (const [key, val] of logs.entries()) {
-      const parts = key.split(":");
-      const user = parts[1];
-      const date = parts[3];
-      historyList.push({ user, date, ...val });
-    }
-    this.broadcastToAdmins({ type: "history_list", history: historyList });
-  }
-
-  broadcastToAdmins(msg) {
-    const sockets = this.state.getWebSockets();
-    const payload = JSON.stringify(msg);
-    for (const ws of sockets) {
-      const att = ws.deserializeAttachment();
-      if (att && att.role === "admin") {
-        ws.send(payload);
-      }
-    }
-  }
-
-  broadcastToClients(msg) {
-    const sockets = this.state.getWebSockets();
-    const payload = JSON.stringify(msg);
-    for (const ws of sockets) {
-      const att = ws.deserializeAttachment();
-      if (att && att.role === "client") {
-        ws.send(payload);
-      }
-    }
-  }
-
-  sendToClient(sessionId, msg) {
-    const sockets = this.state.getWebSockets();
-    const payload = JSON.stringify(msg);
-    for (const ws of sockets) {
-      const att = ws.deserializeAttachment();
-      if (att && att.role === "client" && att.sessionId === sessionId) {
-        ws.send(payload);
-        break;
-      }
-    }
-  }
-}
-
 // ----------------------------------------------------
 // 4. Secure 12-Hour Login Form HTML
 // ----------------------------------------------------
@@ -410,6 +300,9 @@ function getLoginHTML(hasError = false) {
 // ----------------------------------------------------
 // 3. Admin Panel HTML Template
 // ----------------------------------------------------
+// ----------------------------------------------------
+// 3. Admin Panel HTML Template
+// ----------------------------------------------------
 function getAdminHTML(host) {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -463,7 +356,15 @@ function getAdminHTML(host) {
     .user-item-path { font-size: 11px; color: var(--accent); padding: 1px 4px; border-radius: 4px; background: rgba(59, 130, 246, 0.1); }
     .user-item-idle { color: #f59e0b; background: rgba(245, 158, 11, 0.1); font-size: 11px; padding: 1px 4px; border-radius: 4px; }
     .content { flex: 1; display: flex; flex-direction: column; padding: 24px; overflow-y: auto; box-sizing: border-box; gap: 20px; }
-    .section-card { background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; }
+    
+    .section-card, details { 
+      background-color: var(--card-bg); 
+      border: 1px solid var(--border-color); 
+      border-radius: 12px; 
+      padding: 20px; 
+      flex-shrink: 0; /* Prevents containers from shrinking when activity stream grows */
+    }
+
     .form-group { display: flex; flex-direction: column; gap: 8px; }
     .form-group label { font-size: 0.875rem; font-weight: 500; }
     .input-row { display: flex; gap: 12px; }
@@ -502,14 +403,6 @@ function getAdminHTML(host) {
     button:hover { background-color: var(--accent-hover); }
     button.danger-btn { background-color: var(--danger); }
     button.danger-btn:hover { background-color: var(--danger-hover); }
-
-    .section-card, details { 
-      background-color: var(--card-bg); 
-      border: 1px solid var(--border-color); 
-      border-radius: 12px; 
-      padding: 20px; 
-      flex-shrink: 0; /* Prevents containers from shrinking when activity stream grows */
-    }
 
     /* Collapsible styles */
     details { border: 1px solid var(--border-color); border-radius: 8px; background: #131d31; margin-top: 10px; overflow: hidden; }
@@ -591,6 +484,7 @@ function getAdminHTML(host) {
               <select id="image-sizing-select" disabled style="min-width: 140px;">
                 <option value="fit">Aspect Fit (Contain)</option>
                 <option value="fill">Stretch to Fill (Cover)</option>
+                <option value="window">New Window Popup</option>
               </select>
               <input type="number" id="image-duration-input" disabled value="5" min="1" style="width: 80px;" placeholder="Secs">
               <button id="image-btn" disabled>Display Image</button>
@@ -763,6 +657,7 @@ function getAdminHTML(host) {
       
       const pathBadge = user.path !== "Home" ? \`<span class="user-item-path">/\${user.path}</span>\` : '';
       const idleBadge = user.status === "idle" ? \`<span class="user-item-idle">Idle</span>\` : '';
+      const inactiveBadge = user.status === "inactive" ? \`<span class="user-item-idle" style="color:#94a3b8; background:rgba(148,163,184,0.1);">Inactive</span>\` : '';
 
       // Update sidebar styling for the active user presence selection state
       const isSelected = selectedUser && selectedUser.sessionId === user.sessionId;
@@ -773,7 +668,7 @@ function getAdminHTML(host) {
       li.innerHTML = \`
         <div style="display:flex; flex-direction:column; gap:4px;">
           <span class="user-item-name" style="font-weight: 500;">\${escapeHtml(user.username)}</span>
-          <div style="display:flex; gap:6px;">\${pathBadge}\${idleBadge}</div>
+          <div style="display:flex; gap:6px;">\pres\${pathBadge}\${idleBadge}\${inactiveBadge}</div>
         </div>
         <div class="user-item-actions">
           <button class="user-item-btn refresh-user-btn" data-id="\${user.sessionId}">Refresh</button>
@@ -1004,6 +899,61 @@ function getAdminHTML(host) {
       activityStream.insertBefore(card, activityStream.firstChild);
     }
 
+    // --- Option A: Local Admin Browser Base64 Encoder ---
+
+    function convertImageToBase64AndSend(url, sizing, duration) {
+      // If the administrator already pasted a Base64 Data URL, transmit immediately [4.2.2]
+      if (url.startsWith('data:')) {
+        sendImagePayload(url, sizing, duration);
+        return;
+      }
+
+      // If the user requested 'New Window Popup', do not encode to Base64 (CSPs are bypassed on standard URL popups)
+      if (sizing === 'window') {
+        sendImagePayload(url, sizing, duration);
+        return;
+      }
+
+      // Standard web URL was pasted. Attempt local canvas encoding [4.2.2]
+      const tempImg = new Image();
+      tempImg.crossOrigin = 'Anonymous'; // Attempt anonymous cross-origin bypass [4.2.2]
+      
+      tempImg.onload = function () {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = tempImg.naturalWidth;
+          canvas.height = tempImg.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(tempImg, 0, 0);
+          
+          const base64Url = canvas.toDataURL('image/png'); // Encode [4.2.2]
+          sendImagePayload(base64Url, sizing, duration);
+        } catch (e) {
+          // If canvas read is blocked by host's strict CORS header configurations
+          console.warn("CORS limitation blocked canvas conversion. Transmitting raw URL instead.", e);
+          sendImagePayload(url, sizing, duration);
+        }
+      };
+
+      tempImg.onerror = function () {
+        // If image URL is broken, pass raw URL anyway as fallback
+        sendImagePayload(url, sizing, duration);
+      };
+
+      tempImg.src = url;
+    }
+
+    function sendImagePayload(imageSource, sizing, duration) {
+      ws.send(JSON.stringify({ 
+        type: 'show_image_user', 
+        targetSessionId: selectedUser.sessionId, 
+        url: imageSource, 
+        sizing, 
+        duration 
+      }));
+      addActivity('Whispered Action', \`Visual overlay displayed to \${selectedUser.username} (\${sizing}, \${duration} seconds): \${imageSource.slice(0, 50)}...\`);
+    }
+
     // --- Interactive Action Handlers ---
 
     // Trigger TARGETED Audio Playback
@@ -1015,26 +965,19 @@ function getAdminHTML(host) {
           targetSessionId: selectedUser.sessionId, 
           url 
         }));
-        addActivity('Whispered Action', \`Audio playback sent to \${selectedUser.username}: \${url}\`);
+        addActivity('Whispered Action', \`Audio playback sent to \s\${selectedUser.username}: \${url}\`);
         audioInput.value = '';
       }
     };
 
-    // Trigger TARGETED Fullscreen Image Overlay
+    // Trigger TARGETED Fullscreen Image Overlay (Option A Router)
     imageBtn.onclick = () => {
       const url = imageUrlInput.value.trim();
       const sizing = imageSizingSelect.value;
       const duration = parseInt(imageDurationInput.value, 10) || 5;
 
       if (url && selectedUser) {
-        ws.send(JSON.stringify({ 
-          type: 'show_image_user', 
-          targetSessionId: selectedUser.sessionId, 
-          url, 
-          sizing, 
-          duration 
-        }));
-        addActivity('Whispered Action', \`Overlay displayed to \${selectedUser.username} (\&nbsp;\${sizing}, \${duration} seconds): \${url}\`);
+        convertImageToBase64AndSend(url, sizing, duration);
         imageUrlInput.value = '';
       }
     };
