@@ -1,0 +1,12 @@
+name = "stefandos"
+main = "src/index.js"
+compatibility_date = "2026-06-14"
+
+[durable_objects]
+bindings = [
+  { name = "STEFAN_DO", class_name = "StefanDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["StefanDO"]
