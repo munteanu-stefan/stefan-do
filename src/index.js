@@ -6,14 +6,7 @@ import { DurableObject } from "cloudflare:workers";
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    
-    // Normalize path (strips trailing slashes to prevent route mismatch)
     const path = url.pathname.replace(/\/$/, "");
-
-    // Diagnostic Route (Developer Debugging Console)
-    if (path === "/debug") {
-      return await serveDebugPage(request, env);
-    }
 
     // Serve the live admin control panel
     if (path === "/stefan") {
@@ -22,7 +15,7 @@ export default {
       });
     }
 
-    // Serve the lightweight CSP-Bypass popup messenger
+    // Serve the ominous popup messenger bridge
     if (path === "/messenger") {
       return new Response(getMessengerHTML(), {
         headers: { "Content-Type": "text/html;charset=UTF-8" }
@@ -36,11 +29,7 @@ export default {
       return stub.fetch(request);
     }
 
-    // Catch-all 404 displaying the exact path evaluated
-    return new Response(
-      `Route Not Found: "${url.pathname}". Please check your deployment or visit /debug to diagnose.`, 
-      { status: 404 }
-    );
+    return new Response("Not Found", { status: 404 });
   }
 };
 
@@ -55,11 +44,6 @@ export class StefanDO extends DurableObject {
 
   async fetch(request) {
     const url = new URL(request.url);
-
-    // Internal loopback route used for health diagnostics
-    if (url.pathname === "/test-conn") {
-      return new Response("OK", { status: 200 });
-    }
 
     if (url.pathname === "/ws") {
       const pair = new WebSocketPair();
@@ -203,7 +187,7 @@ function getAdminHTML(host) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Stefan's Live Test Control Panel</title>
+  <title>Stefan's Control Panel</title>
   <style>
     :root {
       --bg-color: #0f172a;
@@ -409,7 +393,7 @@ function getAdminHTML(host) {
 </head>
 <body>
   <header>
-    <h1>Stefan's Live Test Control Panel</h1>
+    <h1>Stefan's Control Panel</h1>
     <div class="status-badge">
       <div id="status-indicator" class="indicator"></div>
       <span id="status-text">Disconnected</span>
@@ -423,10 +407,10 @@ function getAdminHTML(host) {
     <div class="content">
       <div class="broadcast-section">
         <div class="form-group">
-          <label for="broadcast-input">Send Global Broadcast Notification</label>
+          <label for="broadcast-input">Stefan says...</label>
           <div class="input-row">
-            <input type="text" id="broadcast-input" placeholder="Type a message to send to all bookmarklet clients...">
-            <button id="broadcast-btn">Broadcast</button>
+            <input type="text" id="broadcast-input" placeholder="Type a message to send to everyone...">
+            <button id="broadcast-btn">Say</button>
           </div>
         </div>
       </div>
@@ -539,7 +523,7 @@ function getAdminHTML(host) {
       const text = broadcastInput.value.trim();
       if (text) {
         ws.send(JSON.stringify({ type: 'broadcast', text }));
-        addActivity('You (Global Broadcast)', text);
+        addActivity('You (Broadcast)', text);
         broadcastInput.value = '';
       }
     };
@@ -569,37 +553,39 @@ function getAdminHTML(host) {
 }
 
 // ----------------------------------------------------
-// 4. Messenger Popup Helper HTML
+// 4. Ominous Messenger Popup Helper HTML
 // ----------------------------------------------------
 function getMessengerHTML() {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Stefan's Connection Bridge</title>
+  <title>...</title>
   <style>
     body {
-      background: #0f172a;
-      color: #94a3b8;
-      font-family: -apple-system, system-ui, sans-serif;
+      background: #090d16;
+      color: #475569;
+      font-family: -apple-system, system-ui, monospace;
       display: flex;
       align-items: center;
       justify-content: center;
       height: 100vh;
       margin: 0;
       text-align: center;
+      user-select: none;
     }
-    h3 { color: #f8fafc; margin: 0 0 8px 0; font-size: 16px; }
-    p { font-size: 13px; margin: 0; padding: 0 16px; line-height: 1.4; }
-    #status { font-weight: 700; color: #ef4444; margin-top: 14px; font-size: 12px; }
+    h3 { 
+      color: #94a3b8; 
+      font-size: 16px; 
+      font-weight: 300; 
+      letter-spacing: 0.15em; 
+      margin: 0; 
+    }
   </style>
 </head>
 <body>
   <div>
-    <h3>Connection Active</h3>
-    <p>This window routes real-time events to your host tab.</p>
-    <p style="color: #64748b; font-size: 11px; margin-top: 4px;">Minimize this window, but do not close it.</p>
-    <div id="status">Connecting...</div>
+    <h3>I'm watching</h3>
   </div>
 
   <script>
@@ -609,22 +595,9 @@ function getMessengerHTML() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = \`\${protocol}//\${window.location.host}/ws?role=client\`;
     const ws = new WebSocket(wsUrl);
-    const statusEl = document.getElementById('status');
 
     ws.onopen = () => {
-      statusEl.textContent = 'Connected Successfully';
-      statusEl.style.color = '#10b981';
       ws.send(JSON.stringify({ type: 'register', username: username }));
-    };
-
-    ws.onclose = () => {
-      statusEl.textContent = 'Disconnected';
-      statusEl.style.color = '#ef4444';
-    };
-
-    ws.onerror = () => {
-      statusEl.textContent = 'Connection Error';
-      statusEl.style.color = '#ef4444';
     };
 
     ws.onmessage = (event) => {
@@ -645,87 +618,4 @@ function getMessengerHTML() {
   </script>
 </body>
 </html>`;
-}
-
-// ----------------------------------------------------
-// 5. Developer Mode Diagnostic Console (Self-Contained)
-// ----------------------------------------------------
-async function serveDebugPage(request, env) {
-  let doStatus = "Durable Object binding not found in the environment context.";
-  let bindingFound = "No";
-
-  if (env.STEFAN_DO) {
-    bindingFound = "Yes (STEFAN_DO exists)";
-    try {
-      const id = env.STEFAN_DO.idFromName("global-test-session");
-      const stub = env.STEFAN_DO.get(id);
-      // Run an internal HTTP loopback fetch call to verify that the DO is responding
-      const testRes = await stub.fetch(new Request("https://internal/test-conn"));
-      if (testRes.status === 200) {
-        doStatus = "Active & Healthy (Internal Loopback Verified)";
-      } else {
-        doStatus = "Unhealthy (Returned status " + testRes.status + ")";
-      }
-    } catch (e) {
-      doStatus = "Failed connecting internally: " + e.message;
-    }
-  }
-
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Stefan's Developer Diagnostic Console</title>
-  <style>
-    body { background: #0b0f19; color: #f8fafc; font-family: monospace; padding: 40px; margin: 0; line-height: 1.5; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 24px; max-width: 700px; margin: 0 auto; }
-    h1 { color: #3b82f6; border-bottom: 1px solid #334155; padding-bottom: 12px; margin-top: 0; font-size: 1.5rem; }
-    .metric { margin-bottom: 16px; display: flex; justify-content: space-between; border-bottom: 1px dashed #334155; padding-bottom: 8px; }
-    .label { color: #94a3b8; font-weight: bold; }
-    .val { color: #10b981; }
-    .val.error { color: #ef4444; }
-    .routes { margin-top: 24px; }
-    ul { padding-left: 20px; }
-    li { margin-bottom: 6px; }
-    a { color: #3b82f6; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Stefan's Diagnostic Console</h1>
-    
-    <div class="metric">
-      <span class="label">Incoming Request Path:</span>
-      <span class="val">${new URL(request.url).pathname}</span>
-    </div>
-
-    <div class="metric">
-      <span class="label">STEFAN_DO Environment Binding:</span>
-      <span class="val ${env.STEFAN_DO ? 'success' : 'error'}">${bindingFound}</span>
-    </div>
-
-    <div class="metric">
-      <span class="label">Durable Object Health Test:</span>
-      <span class="val ${doStatus.includes('Healthy') ? 'success' : 'error'}">${doStatus}</span>
-    </div>
-
-    <div class="metric">
-      <span class="label">Deployment Domain:</span>
-      <span class="val">${new URL(request.url).host}</span>
-    </div>
-
-    <div class="routes">
-      <h3>Active Router Routes:</h3>
-      <ul>
-        <li><strong>Control Panel:</strong> <a href="/stefan">/stefan</a></li>
-        <li><strong>Popup Messenger Bridge:</strong> <a href="/messenger">/messenger</a></li>
-        <li><strong>WebSocket Entry Point:</strong> /ws</li>
-        <li><strong>Developer Diagnostics:</strong> <a href="/debug">/debug</a></li>
-      </ul>
-    </div>
-  </div>
-</body>
-</html>`;
-  return new Response(html, { headers: { "Content-Type": "text/html;charset=UTF-8" } });
 }
