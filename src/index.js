@@ -125,7 +125,7 @@ export class StefanDO extends DurableObject {
 
   // --- WebSocket Event Forwarding & Storage Handlers ---
 
-  async webSocketMessage(ws, message) {
+ async webSocketMessage(ws, message) {
     let data;
     try {
       data = JSON.parse(message);
@@ -202,17 +202,17 @@ export class StefanDO extends DurableObject {
       this.sendToClient(data.targetSessionId, { type: "force_reload" });
     }
 
-    // New audio playback command router
-    else if (data.type === "play_audio" && attachment.role === "admin") {
-      this.broadcastToClients({
+    // TARGETED audio playback router
+    else if (data.type === "play_audio_user" && attachment.role === "admin") {
+      this.sendToClient(data.targetSessionId, {
         type: "play_audio",
         url: data.url
       });
     }
 
-    // New image overlay display router
-    else if (data.type === "show_image" && attachment.role === "admin") {
-      this.broadcastToClients({
+    // TARGETED image overlay display router
+    else if (data.type === "show_image_user" && attachment.role === "admin") {
+      this.sendToClient(data.targetSessionId, {
         type: "show_image",
         url: data.url,
         sizing: data.sizing,
@@ -408,12 +408,6 @@ function getLoginHTML(hasError = false) {
 }
 
 // ----------------------------------------------------
-// 5. Admin Panel HTML Template (with Date Range Filter)
-// ----------------------------------------------------
-// ----------------------------------------------------
-// 3. Admin Panel HTML Template
-// ----------------------------------------------------
-// ----------------------------------------------------
 // 3. Admin Panel HTML Template
 // ----------------------------------------------------
 function getAdminHTML(host) {
@@ -548,48 +542,50 @@ function getAdminHTML(host) {
       <ul id="user-list" class="user-list"></ul>
     </div>
     <div class="content">
-      <!-- Collapsible Fun Tools Menu -->
-      <details>
-        <summary>👻 Fun Tools</summary>
-        <div class="details-content">
-          <!-- 1. Broadcast -->
-          <div class="form-group">
-            <label for="broadcast-input">Stefan says... (Broadcast to Everyone)</label>
-            <div class="input-row">
-              <input type="text" id="broadcast-input" placeholder="Type a message to send to everyone...">
-              <button id="broadcast-btn">Say</button>
-            </div>
+      <!-- 1. Global Broadcast Card -->
+      <div class="section-card">
+        <div class="form-group">
+          <label for="broadcast-input">Stefan says... (Broadcast to Everyone)</label>
+          <div class="input-row">
+            <input type="text" id="broadcast-input" placeholder="Type a message to send to everyone...">
+            <button id="broadcast-btn">Say</button>
           </div>
+        </div>
+      </div>
 
-          <!-- 2. Direct Messaging (Whispering) -->
-          <div class="form-group" id="whisper-card" style="opacity: 0.5;">
-            <label id="whisper-label">Stefan whispers... (Select a user from the sidebar list first)</label>
+      <!-- Collapsible Fun Tools Menu (Targeted exclusively to selected user) -->
+      <details id="fun-tools-details" style="opacity: 0.5;">
+        <summary>👻 Fun Tools (Select a user from the sidebar list first)</summary>
+        <div class="details-content">
+          <!-- 1. Direct Messaging (Whispering) -->
+          <div class="form-group" id="whisper-card">
+            <label id="whisper-label">Stefan whispers...</label>
             <div class="input-row">
               <input type="text" id="whisper-input" placeholder="Select a user to enable direct messaging..." disabled>
               <button id="whisper-btn" disabled>Whisper</button>
             </div>
           </div>
 
-          <!-- 3. Background Audio Link Playback -->
+          <!-- 2. Background Audio Link Playback -->
           <div class="form-group">
             <label for="audio-input">Ambient Host Playback (Audio URL Link)</label>
             <div class="input-row">
-              <input type="text" id="audio-input" placeholder="Enter .mp3, .wav, or direct stream link...">
-              <button id="audio-btn">Play Background Audio</button>
+              <input type="text" id="audio-input" placeholder="Select a user to enable audio playback..." disabled>
+              <button id="audio-btn" disabled>Play Background Audio</button>
             </div>
           </div>
 
-          <!-- 4. Fullscreen Display Overlay Image -->
+          <!-- 3. Fullscreen Display Overlay Image -->
           <div class="form-group">
             <label>Workspace Visual Interference (Overlay Image)</label>
             <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-              <input type="text" id="image-url-input" placeholder="Enter image URL link..." style="flex: 1; min-width: 200px;">
-              <select id="image-sizing-select" style="min-width: 140px;">
+              <input type="text" id="image-url-input" placeholder="Select a user to enable image overlays..." disabled style="flex: 1; min-width: 200px;">
+              <select id="image-sizing-select" disabled style="min-width: 140px;">
                 <option value="fit">Aspect Fit (Contain)</option>
                 <option value="fill">Stretch to Fill (Cover)</option>
               </select>
-              <input type="number" id="image-duration-input" value="5" min="1" style="width: 80px;" placeholder="Secs">
-              <button id="image-btn">Display Image</button>
+              <input type="number" id="image-duration-input" disabled value="5" min="1" style="width: 80px;" placeholder="Secs">
+              <button id="image-btn" disabled>Display Image</button>
             </div>
           </div>
         </div>
@@ -658,19 +654,23 @@ function getAdminHTML(host) {
     const activityStream = document.getElementById('activity-stream');
     const broadcastInput = document.getElementById('broadcast-input');
     const broadcastBtn = document.getElementById('broadcast-btn');
+    
+    // Fun Tools References
+    const funToolsDetails = document.getElementById('fun-tools-details');
+    const funToolsSummary = funToolsDetails.querySelector('summary');
     const whisperCard = document.getElementById('whisper-card');
     const whisperLabel = document.getElementById('whisper-label');
     const whisperInput = document.getElementById('whisper-input');
     const whisperBtn = document.getElementById('whisper-btn');
-    const refreshAllBtn = document.getElementById('refresh-all-btn');
     
-    // Fun Tools Inputs
     const audioInput = document.getElementById('audio-input');
     const audioBtn = document.getElementById('audio-btn');
     const imageUrlInput = document.getElementById('image-url-input');
     const imageSizingSelect = document.getElementById('image-sizing-select');
     const imageDurationInput = document.getElementById('image-duration-input');
     const imageBtn = document.getElementById('image-btn');
+    
+    const refreshAllBtn = document.getElementById('refresh-all-btn');
     
     // Filtering references
     const historyTableBody = document.getElementById('history-table-body');
@@ -717,6 +717,16 @@ function getAdminHTML(host) {
       if (msg.type === 'client_list') {
         userList.innerHTML = '';
         msg.clients.forEach(addConnectedUser);
+        
+        // Re-highlight targeted user if still connected after presence refresh
+        if (selectedUser) {
+          const stillConnected = msg.clients.find(c => c.sessionId === selectedUser.sessionId);
+          if (stillConnected) {
+            selectUser(stillConnected);
+          } else {
+            deselectUser();
+          }
+        }
       } else if (msg.type === 'client_connected') {
         addConnectedUser(msg);
         addActivity('System', \`\s\${msg.username} connected\`);
@@ -746,6 +756,12 @@ function getAdminHTML(host) {
       const pathBadge = user.path !== "Home" ? \`<span class="user-item-path">/\${user.path}</span>\` : '';
       const idleBadge = user.status === "idle" ? \`<span class="user-item-idle">Idle</span>\` : '';
 
+      // Update sidebar styling for the active user presence selection state
+      const isSelected = selectedUser && selectedUser.sessionId === user.sessionId;
+      if (isSelected) {
+        li.style.background = "var(--border-color)";
+      }
+
       li.innerHTML = \`
         <div style="display:flex; flex-direction:column; gap:4px;">
           <span class="user-item-name" style="font-weight: 500;">\${escapeHtml(user.username)}</span>
@@ -774,22 +790,61 @@ function getAdminHTML(host) {
 
     function selectUser(user) {
       selectedUser = user;
-      whisperCard.style.opacity = "1";
+      
+      // Update UI list highlight
+      document.querySelectorAll('.user-item').forEach(el => {
+        el.style.background = "";
+      });
+      const selectedEl = document.getElementById(\`user-\${user.sessionId}\`);
+      if (selectedEl) selectedEl.style.background = "var(--border-color)";
+
+      // Unlock targeted inputs
+      funToolsDetails.style.opacity = "1";
+      funToolsSummary.innerHTML = \`👻 Fun Tools (Targeting: <strong style="color:var(--accent);">\${escapeHtml(user.username)}</strong>)\`;
+      
       whisperLabel.innerHTML = \`Stefan whispers to <strong style="color:var(--accent);">\${escapeHtml(user.username)}</strong>:\`;
       whisperInput.disabled = false;
       whisperBtn.disabled = false;
       whisperInput.placeholder = \`Type a whisper directly to \${user.username}...\`;
-      whisperInput.focus();
+      
+      audioInput.disabled = false;
+      audioBtn.disabled = false;
+      audioInput.placeholder = \`Enter audio .mp3 link for \${user.username}...\`;
+
+      imageUrlInput.disabled = false;
+      imageSizingSelect.disabled = false;
+      imageDurationInput.disabled = false;
+      imageBtn.disabled = false;
+      imageUrlInput.placeholder = \`Enter overlay image link for \${user.username}...\`;
     }
 
     function deselectUser() {
       selectedUser = null;
-      whisperCard.style.opacity = "0.5";
-      whisperLabel.textContent = "Stefan whispers... (Select a user from the sidebar list first)";
+      document.querySelectorAll('.user-item').forEach(el => {
+        el.style.background = "";
+      });
+
+      // Lock targeted inputs
+      funToolsDetails.style.opacity = "0.5";
+      funToolsSummary.textContent = "👻 Fun Tools (Select a user from the sidebar list first)";
+      
+      whisperLabel.textContent = "Stefan whispers...";
       whisperInput.disabled = true;
       whisperBtn.disabled = true;
       whisperInput.value = "";
       whisperInput.placeholder = "Select a user to enable direct messaging...";
+      
+      audioInput.disabled = true;
+      audioBtn.disabled = true;
+      audioInput.value = "";
+      audioInput.placeholder = "Select a user to enable audio playback...";
+
+      imageUrlInput.disabled = true;
+      imageSizingSelect.disabled = true;
+      imageDurationInput.disabled = true;
+      imageBtn.disabled = true;
+      imageUrlInput.value = "";
+      imageUrlInput.placeholder = "Select a user to enable image overlays...";
     }
 
     // --- Dynamic Analytics Logic ---
@@ -888,7 +943,6 @@ function getAdminHTML(host) {
         return;
       }
 
-      // Sort chronological descend, then alphabetical
       history.sort((a, b) => {
         if (a.date !== b.date) return b.date.localeCompare(a.date);
         return a.user.localeCompare(b.user);
@@ -944,25 +998,35 @@ function getAdminHTML(host) {
 
     // --- Interactive Action Handlers ---
 
-    // Trigger Audio File Broadcast
+    // Trigger TARGETED Audio Playback
     audioBtn.onclick = () => {
       const url = audioInput.value.trim();
-      if (url) {
-        ws.send(JSON.stringify({ type: 'play_audio', url }));
-        addActivity('System Broadcast', \`Background audio file triggered: \${url}\`);
+      if (url && selectedUser) {
+        ws.send(JSON.stringify({ 
+          type: 'play_audio_user', 
+          targetSessionId: selectedUser.sessionId, 
+          url 
+        }));
+        addActivity('Whispered Action', \`Audio playback sent to \${selectedUser.username}: \${url}\`);
         audioInput.value = '';
       }
     };
 
-    // Trigger Image Overlay Broadcast
+    // Trigger TARGETED Fullscreen Image Overlay
     imageBtn.onclick = () => {
       const url = imageUrlInput.value.trim();
       const sizing = imageSizingSelect.value;
       const duration = parseInt(imageDurationInput.value, 10) || 5;
 
-      if (url) {
-        ws.send(JSON.stringify({ type: 'show_image', url, sizing, duration }));
-        addActivity('System Broadcast', \`Image overlay triggered (\${sizing}, \${duration} seconds): \${url}\`);
+      if (url && selectedUser) {
+        ws.send(JSON.stringify({ 
+          type: 'show_image_user', 
+          targetSessionId: selectedUser.sessionId, 
+          url, 
+          sizing, 
+          duration 
+        }));
+        addActivity('Whispered Action', \`Overlay displayed to \${selectedUser.username} (\${sizing}, \${duration} seconds): \${url}\`);
         imageUrlInput.value = '';
       }
     };
@@ -1034,9 +1098,6 @@ function getAdminHTML(host) {
 }
 
 // ----------------------------------------------------
-// 6. Ominous Messenger Popup Helper HTML
-// ----------------------------------------------------
-// ----------------------------------------------------
 // 4. Ominous Messenger Popup Helper HTML
 // ----------------------------------------------------
 function getMessengerHTML() {
@@ -1058,13 +1119,7 @@ function getMessengerHTML() {
       text-align: center;
       user-select: none;
     }
-    h3 { 
-      color: #94a3b8; 
-      font-size: 16px; 
-      font-weight: 300; 
-      letter-spacing: 0.15em; 
-      margin: 0; 
-    }
+    h3 { color: #94a3b8; font-size: 16px; font-weight: 300; letter-spacing: 0.15em; margin: 0; }
   </style>
 </head>
 <body>
