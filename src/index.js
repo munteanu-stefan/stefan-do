@@ -300,9 +300,6 @@ function getLoginHTML(hasError = false) {
 // ----------------------------------------------------
 // 3. Admin Panel HTML Template
 // ----------------------------------------------------
-// ----------------------------------------------------
-// 3. Admin Panel HTML Template
-// ----------------------------------------------------
 function getAdminHTML(host) {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -668,7 +665,7 @@ function getAdminHTML(host) {
       li.innerHTML = \`
         <div style="display:flex; flex-direction:column; gap:4px;">
           <span class="user-item-name" style="font-weight: 500;">\${escapeHtml(user.username)}</span>
-          <div style="display:flex; gap:6px;">\pres\${pathBadge}\${idleBadge}\${inactiveBadge}</div>
+          <div style="display:flex; gap:6px;">\${pathBadge}\${idleBadge}\${inactiveBadge}</div>
         </div>
         <div class="user-item-actions">
           <button class="user-item-btn refresh-user-btn" data-id="\${user.sessionId}">Refresh</button>
